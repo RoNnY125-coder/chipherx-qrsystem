@@ -2,23 +2,28 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function CheckpointPage() {
+  const router = useRouter();
+
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState("");
   const [loading, setLoading] = useState(false);
-const handleSubmit = () => {
-  if (!answer.trim()) {
-    setFeedback("Please enter your answer first.");
-    return;
-  }
 
-  setLoading(true);
-  setFeedback("Your answer has been submitted successfully!");
-  setTimeout(() => {
-    setLoading(false);
-  }, 1000);
-};
+  const handleSubmit = () => {
+    if (!answer.trim()) {
+      setFeedback("Please enter your answer first.");
+      return;
+    }
+
+    setLoading(true);
+    setFeedback("Your answer has been submitted successfully!");
+
+    setTimeout(() => {
+      setLoading(false);
+    }, 1000);
+  };
 
   return (
     <main className="min-h-screen bg-[#080b17] text-white px-6 py-10">
@@ -47,9 +52,9 @@ const handleSubmit = () => {
               QUESTION
             </p>
 
-          <h3 className="text-xl font-semibold mt-3">
-  Waiting for checkpoint question...
-</h3>
+            <h3 className="text-xl font-semibold mt-3">
+              Waiting for checkpoint question...
+            </h3>
           </div>
 
           <label className="block mt-8 mb-3 font-medium">
@@ -67,13 +72,13 @@ const handleSubmit = () => {
             className="w-full p-4 rounded-lg bg-[#080b17] border border-gray-600 focus:border-cyan-400 outline-none"
           />
 
-       <button
-  onClick={handleSubmit}
-  disabled={loading}
-  className="w-full mt-6 bg-cyan-400 hover:bg-cyan-300 text-black font-bold py-4 rounded-lg transition disabled:opacity-50"
->
-  {loading ? "Submitting..." : "Submit Answer"}
-</button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="w-full mt-6 bg-cyan-400 hover:bg-cyan-300 text-black font-bold py-4 rounded-lg transition disabled:opacity-50"
+          >
+            {loading ? "Submitting..." : "Submit Answer"}
+          </button>
 
           {feedback && (
             <p className="mt-5 text-center text-cyan-300">
@@ -82,7 +87,7 @@ const handleSubmit = () => {
           )}
 
           <button
-            onClick={() => window.location.href = "/dashboard"}
+            onClick={() => router.push("/dashboard")}
             className="block mx-auto mt-8 text-cyan-400 hover:underline"
           >
             ← Back to Dashboard
@@ -93,3 +98,4 @@ const handleSubmit = () => {
     </main>
   );
 }
+
