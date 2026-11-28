@@ -1,4 +1,6 @@
 
+import Link from "next/link";
+
 export default function Login() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#080b18] px-5 py-10 text-white">
@@ -44,19 +46,20 @@ export default function Login() {
         </form>
 
         <p className="mt-6 text-center text-sm text-gray-400">
-          Don't have an account?{" "}
-          <a href="/register" className="text-cyan-400 hover:underline">
+          Don&apos;t have an account?{" "}
+          <Link href="/register" className="text-cyan-400 hover:underline">
             Register
-          </a>
+          </Link>
         </p>
 
         <p className="mt-5 text-center">
-          <a href="/" className="text-sm text-gray-500 hover:text-cyan-400">
+          <Link href="/" className="text-sm text-gray-500 hover:text-cyan-400">
             ← Back to Home
-          </a>
+          </Link>
         </p>
 
       </div>
     </main>
   );
 }
+

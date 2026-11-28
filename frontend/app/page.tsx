@@ -1,4 +1,6 @@
 
+import Link from "next/link";
+
 export default function Home() {
   return (
     <main className="min-h-screen bg-[#080b18] text-white">
@@ -8,40 +10,35 @@ export default function Home() {
           CIPHERX
         </h1>
 
-        <div className="flex gap-6 items-center">
-          <a href="#about" className="text-gray-300 hover:text-cyan-400">
-            About
-          </a>
-          <a href="/login" className="rounded-lg border border-cyan-400 px-5 py-2 hover:bg-cyan-400 hover:text-black">
-            Login
-          </a>
-        </div>
+        <a href="#about" className="text-gray-300 hover:text-cyan-400">
+          About
+        </a>
       </nav>
 
       {/* Hero Section */}
       <section className="flex min-h-[80vh] flex-col items-center justify-center px-6 text-center">
         <p className="mb-5 text-sm font-semibold tracking-[0.4em] text-cyan-400">
-          THE ULTIMATE TECH TREASURE HUNT
+          CIPHERX ATTENDANCE SYSTEM
         </p>
 
         <h2 className="max-w-4xl text-5xl font-extrabold leading-tight md:text-7xl">
-          THINK. SCAN. <span className="text-cyan-400">SOLVE.</span>
+          SCAN. <span className="text-cyan-400">VERIFY.</span> GO.
         </h2>
 
         <p className="mt-6 max-w-xl text-lg text-gray-400">
-          Follow the clues, scan the checkpoints, solve the challenges
-          and race your way to the top of the leaderboard.
+          Welcome to CipherX! Scan your unique QR code received
+          through email to mark your event attendance.
         </p>
 
-        <a
-          href="/register"
+        <Link
+          href="/scanner"
           className="mt-10 rounded-lg bg-cyan-400 px-8 py-4 font-bold text-black transition hover:bg-cyan-300"
         >
-          Join the Hunt →
-        </a>
+          Scan Attendance QR →
+        </Link>
 
         <p className="mt-5 text-sm text-gray-500">
-          Your adventure begins here.
+          No login required. Just scan your QR code.
         </p>
       </section>
 
@@ -55,18 +52,18 @@ export default function Home() {
           {[
             {
               number: "01",
-              title: "Find the Clue",
-              description: "Explore the event venue and discover checkpoints."
+              title: "Receive Your QR",
+              description: "Get your unique QR code through email."
             },
             {
               number: "02",
-              title: "Scan & Solve",
-              description: "Scan QR codes and solve the challenges."
+              title: "Scan Your QR",
+              description: "Open the website scanner and scan your QR code."
             },
             {
               number: "03",
-              title: "Climb the Ranks",
-              description: "Earn points and compete on the leaderboard."
+              title: "Mark Attendance",
+              description: "Your QR code will be verified and attendance recorded."
             }
           ].map((step) => (
             <div
@@ -93,3 +90,5 @@ export default function Home() {
     </main>
   );
 }
+
+
