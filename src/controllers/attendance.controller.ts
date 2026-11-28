@@ -1,22 +1,31 @@
-import { Request, Response, NextFunction } from "express";
+import { Response, NextFunction } from "express";
+import { StaffAuthenticatedRequest } from "../middleware/auth";
 import { AttendanceService } from "../services/attendance.service";
 
 export class AttendanceController {
-  static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
+  /**
+   * Primary event-day API: Scans a participant's QR code and records attendance.
+   * Requires verified staff authentication.
+   */
+  static async scan(req: StaffAuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { name, externalUserId, teamName } = req.body;
-      const result = await AttendanceService.registerParticipant({
-        name,
-        externalUserId,
-        teamName,
-      });
+      const { qrToken } = req.body;
+      const scannedBy = req.staff?.userId || "authorized_staff";
 
-      res.status(result.isNew ? 201 : 200).json({
+      const result = await AttendanceService.recordAttendance(qrToken, scannedBy);
+
+      if (!result.success) {
+        res.status(result.statusCode).json({
+          success: false,
+          message: result.message,
+        });
+        return;
+      }
+
+      res.status(result.statusCode).json({
         success: true,
-        message: result.isNew
-          ? "Participant registered successfully"
-          : "Participant attendance already recorded",
-        data: result.participant,
+        message: result.message,
+        data: result.data,
       });
     } catch (error) {
       next(error);

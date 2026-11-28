@@ -1,83 +1,204 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
+import { hashQrToken } from "../utils/token";
 
-export interface AttendanceRegistrationInput {
-  name: string;
-  externalUserId: string;
-  teamName: string;
+export interface ScanAttendanceResult {
+  success: boolean;
+  statusCode: number;
+  message: string;
+  data?: {
+    participantName: string;
+    teamName: string;
+    attendanceStatus: "PRESENT";
+    scannedAt: Date;
+  };
 }
 
 export class AttendanceService {
   /**
-   * Registers a participant and associates them with a team.
-   * If the team does not exist, it is created.
-   * If the participant is already registered, verifies team association consistency.
+   * Primary event-day API: Scans a participant's personal QR code and atomically records attendance.
+   * Guarantees single-attendance enforcement via @@unique([participantId]) in PostgreSQL.
    */
-  static async registerParticipant(input: AttendanceRegistrationInput) {
-    const { name, externalUserId, teamName } = input;
+  static async recordAttendance(
+    qrToken: string,
+    scannedBy?: string
+  ): Promise<ScanAttendanceResult> {
+    // 1. Hash the submitted QR token using SHA-256
+    const tokenHash = hashQrToken(qrToken);
 
-    // Check if participant is already registered
-    const existingParticipant = await prisma.participant.findUnique({
-      where: { externalUserId },
-      include: { team: true },
+    // 2. Find participant associated with this token hash
+    const participant = await prisma.participant.findUnique({
+      where: { qrTokenHash: tokenHash },
+      include: {
+        team: true,
+        attendance: true,
+      },
     });
 
-    if (existingParticipant) {
-      if (existingParticipant.team.teamName !== teamName) {
-        const error: any = new Error(
-          `Participant is already registered under team "${existingParticipant.team.teamName}". Team re-assignment is not permitted.`
-        );
-        error.statusCode = 409;
-        throw error;
-      }
-
+    // 3. Reject invalid tokens
+    if (!participant) {
       return {
-        isNew: false,
-        participant: {
-          id: existingParticipant.id,
-          name: existingParticipant.name,
-          externalUserId: existingParticipant.externalUserId,
-          team: {
-            id: existingParticipant.team.id,
-            teamName: existingParticipant.team.teamName,
-          },
-        },
+        success: false,
+        statusCode: 404,
+        message: "Invalid QR code.",
       };
     }
 
-    // Upsert or find team
-    let team = await prisma.team.findUnique({
-      where: { teamName },
-    });
-
-    if (!team) {
-      team = await prisma.team.create({
-        data: { teamName },
-      });
+    // 4. Check if attendance already exists
+    if (participant.attendance) {
+      return {
+        success: false,
+        statusCode: 409,
+        message: "Attendance has already been registered.",
+      };
     }
 
-    // Create participant mapped to team
-    const participant = await prisma.participant.create({
-      data: {
-        name,
-        externalUserId,
+    // 5. Atomically create the attendance record inside a transaction
+    try {
+      const attendance = await prisma.$transaction(async (tx) => {
+        return tx.attendance.create({
+          data: {
+            participantId: participant.id,
+            scannedBy: scannedBy || null,
+          },
+        });
+      });
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Attendance registered successfully",
+        data: {
+          participantName: participant.name,
+          teamName: participant.team.teamName,
+          attendanceStatus: "PRESENT",
+          scannedAt: attendance.scannedAt,
+        },
+      };
+    } catch (error) {
+      // Catch concurrent scan collisions via unique constraint
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return {
+          success: false,
+          statusCode: 409,
+          message: "Attendance has already been registered.",
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieves overall attendance summary statistics and team-wise attendance breakdown.
+   */
+  static async getAttendanceSummary() {
+    const [totalParticipants, totalPresent, teams] = await Promise.all([
+      prisma.participant.count(),
+      prisma.attendance.count(),
+      prisma.team.findMany({
+        select: {
+          id: true,
+          teamName: true,
+          participants: {
+            select: {
+              id: true,
+              attendance: {
+                select: { id: true },
+              },
+            },
+          },
+        },
+        orderBy: { teamName: "asc" },
+      }),
+    ]);
+
+    const totalAbsent = totalParticipants - totalPresent;
+    const attendancePercentage =
+      totalParticipants > 0
+        ? Number(((totalPresent / totalParticipants) * 100).toFixed(2))
+        : 0;
+
+    const teamBreakdown = teams.map((team) => {
+      const teamTotal = team.participants.length;
+      const teamPresent = team.participants.filter((p) => p.attendance !== null).length;
+      const teamAbsent = teamTotal - teamPresent;
+      const teamPct = teamTotal > 0 ? Number(((teamPresent / teamTotal) * 100).toFixed(2)) : 0;
+
+      return {
         teamId: team.id,
-      },
-      include: {
-        team: true,
-      },
+        teamName: team.teamName,
+        totalMembers: teamTotal,
+        presentMembers: teamPresent,
+        absentMembers: teamAbsent,
+        attendancePercentage: teamPct,
+      };
     });
 
     return {
-      isNew: true,
-      participant: {
-        id: participant.id,
-        name: participant.name,
-        externalUserId: participant.externalUserId,
-        team: {
-          id: team.id,
-          teamName: team.teamName,
+      totalParticipants,
+      totalPresent,
+      totalAbsent,
+      attendancePercentage,
+      teams: teamBreakdown,
+    };
+  }
+
+  /**
+   * Retrieves detailed attendance for a specific team.
+   */
+  static async getTeamAttendance(teamId: string) {
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      include: {
+        participants: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            externalUserId: true,
+            attendance: {
+              select: {
+                id: true,
+                scannedAt: true,
+                scannedBy: true,
+              },
+            },
+          },
+          orderBy: { name: "asc" },
         },
       },
+    });
+
+    if (!team) {
+      const error: any = new Error(`Team with ID "${teamId}" was not found.`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const totalMembers = team.participants.length;
+    const presentMembers = team.participants.filter((p) => p.attendance !== null).length;
+    const absentMembers = totalMembers - presentMembers;
+
+    const members = team.participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      email: p.email,
+      externalUserId: p.externalUserId,
+      attendanceStatus: p.attendance ? "PRESENT" : "ABSENT",
+      scannedAt: p.attendance?.scannedAt || null,
+      scannedBy: p.attendance?.scannedBy || null,
+    }));
+
+    return {
+      teamId: team.id,
+      teamName: team.teamName,
+      totalMembers,
+      presentMembers,
+      absentMembers,
+      members,
     };
   }
 }

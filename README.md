@@ -1,6 +1,6 @@
-# CipherX — Treasure Hunt QR Backend
+# CipherX — Treasure Hunt Attendance QR Backend
 
-Independent, security-hardened backend service for a college Treasure Hunt event. It handles checkpoint lifecycle management, cryptographic QR token generation & rendering, participant-to-team identity resolution, and database-level team access restrictions.
+Independent, security-hardened backend service for the **Treasure Hunt Event Attendance System**. Each registered participant receives a unique, cryptographically secure QR code before the event; on event day, authorized event staff scan each participant's QR code via the embedded scanner in the main event website to record attendance atomically.
 
 ---
 
@@ -8,47 +8,44 @@ Independent, security-hardened backend service for a college Treasure Hunt event
 
 | Domain | Owner |
 |---|---|
-| Checkpoint Creation, Listing & Toggling | **QR Backend (This Service)** |
-| 256-bit Cryptographic QR Token Generation & SHA-256 Hashing | **QR Backend (This Service)** |
-| Dynamic PNG QR Code Generation | **QR Backend (This Service)** |
-| Atomic Team-Level Checkpoint Access Enforcement (1 attempt per team) | **QR Backend (This Service)** |
-| Quiz Access Records (`QuizAccess`) | **QR Backend (This Service)** |
-| Participant Registration & Login | Main Website Team |
-| Embedded QR Scanner Frontend | Main Website Team |
-| Quiz UI, Questions & Answer Evaluation | Main Website Team |
-| Answer Locking & Immutability | Main Website Team |
-| Leaderboard & Scoring | Main Website Team |
+| Bulk CSV Participant & Team Import | **Attendance QR Backend (This Service)** |
+| 256-bit Cryptographic QR Token Generation (`TH26_...`) & SHA-256 Hashing | **Attendance QR Backend (This Service)** |
+| AES-256-GCM Token Encryption & Individual / Bulk ZIP QR Export | **Attendance QR Backend (This Service)** |
+| Atomic Event-Day Attendance Scanning (1 check-in per participant) | **Attendance QR Backend (This Service)** |
+| Attendance Summary & Team Breakdown Reporting | **Attendance QR Backend (This Service)** |
+| Embedded QR Scanner UI & Staff Login | Main Event Website Team |
+| Quiz UI, Scoring & Leaderboard | Main Event Website Team |
 
 ---
 
 ## 2. Architecture & Tech Stack
 
 ```
-               [ PARTICIPANTS' PHONES ]
-                          │
-                          ▼ (Web Browser)
-                [ MAIN EVENT WEBSITE ]
-                          │
-           ┌──────────────┴──────────────┐
-           │ (API: Scan / Attendance)    │ (Admin Dashboard)
-           ▼                             ▼
-    ┌──────────────────────────────────────────────┐
-    │          TREASURE HUNT QR BACKEND            │
-    │  - Node.js + Express 5 + TypeScript 7        │
-    │  - Strict Zod Input Validation               │
-    │  - Constant-Time Admin Key Comparison        │
-    │  - AES-256-GCM Token Encryption              │
-    │  - IP-based Rate Limiting (express-rate-limit)│
-    │  - Whitelisted CORS                          │
-    └──────────────────────┬───────────────────────┘
-                           │ Prisma ORM (v6.12.0)
-                           │ (Transaction Pooler :6543)
-                           ▼
-          [ SUPABASE POSTGRESQL (Mumbai ap-south-1) ]
-           - Checkpoint (unique SHA-256 hash)
-           - Team
-           - Participant (mapped to Team)
-           - QuizAccess (UNIQUE constraint: teamId + checkpointId)
+              [ PARTICIPANTS' PERSONAL QRs ]
+                            │
+                            ▼ (Scanned by Event Staff)
+                  [ MAIN EVENT WEBSITE ]
+                            │
+             ┌──────────────┴──────────────┐
+             │ (POST /api/attendance/scan) │ (Admin Dashboard / CSV / ZIP)
+             ▼                             ▼
+      ┌──────────────────────────────────────────────┐
+      │     TREASURE HUNT ATTENDANCE QR BACKEND      │
+      │  - Node.js + Express 5 + TypeScript 7        │
+      │  - Strict Zod Input Validation               │
+      │  - Constant-Time Admin Key Comparison        │
+      │  - SHA-256 Lookup + AES-256-GCM Encryption   │
+      │  - Archiver v8 Streaming ZIP Export          │
+      │  - IP-based Rate Limiting                    │
+      │  - Whitelisted CORS                          │
+      └──────────────────────┬───────────────────────┘
+                             │ Prisma ORM (v6.12.0)
+                             │ (Transaction Pooler :6543)
+                             ▼
+            [ SUPABASE POSTGRESQL (Mumbai ap-south-1) ]
+             - Team
+             - Participant (unique email, unique qrTokenHash)
+             - Attendance (UNIQUE constraint on participantId)
 ```
 
 - **Runtime:** Node.js (v20+)
@@ -57,199 +54,137 @@ Independent, security-hardened backend service for a college Treasure Hunt event
 - **Database:** Supabase-hosted PostgreSQL (Mumbai `ap-south-1`) with PgBouncer connection pooling
 - **ORM:** Prisma 6.12.0
 - **Validation:** Zod
-- **QR Engine:** `qrcode` & Node.js `crypto`
+- **QR & Export:** `qrcode`, Node.js `crypto`, `archiver` v8 (`ZipArchive`), `multer`
 
 ---
 
 ## 3. API Documentation
 
-### A. Checkpoint Management (Admin Only)
-*All administrative endpoints require the `x-admin-key: <ADMIN_API_KEY>` header.*
-
-#### 1. Create Checkpoint
-- **Endpoint:** `POST /api/checkpoints`
-- **Headers:** `x-admin-key: <ADMIN_API_KEY>`, `Content-Type: application/json`
-- **Request Body:**
-  ```json
-  {
-    "name": "Library Garden Checkpoint",
-    "isActive": true
-  }
-  ```
-- **Response (201 Created):**
-  ```json
-  {
-    "success": true,
-    "message": "Checkpoint created successfully",
-    "data": {
-      "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
-      "name": "Library Garden Checkpoint",
-      "isActive": true,
-      "createdAt": "2026-11-26T12:00:00.000Z",
-      "updatedAt": "2026-11-26T12:00:00.000Z",
-      "qrToken": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
-    }
-  }
-  ```
-  *(Note: The plaintext `qrToken` is returned **only once** upon creation. Only its SHA-256 hash and AES-256-GCM ciphertext are stored in the database.)*
-
-#### 2. Get All Checkpoints
-- **Endpoint:** `GET /api/checkpoints?page=1&limit=50`
-- **Headers:** `x-admin-key: <ADMIN_API_KEY>`
-- **Response (200 OK):**
-  ```json
-  {
-    "success": true,
-    "data": [
-      {
-        "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
-        "name": "Library Garden Checkpoint",
-        "isActive": true,
-        "createdAt": "2026-11-26T12:00:00.000Z",
-        "updatedAt": "2026-11-26T12:00:00.000Z"
-      }
-    ],
-    "pagination": { "total": 1, "page": 1, "limit": 50, "totalPages": 1 }
-  }
-  ```
-  *(Note: Token hashes and encrypted tokens are never leaked.)*
-
-#### 3. Update Checkpoint Status
-- **Endpoint:** `PATCH /api/checkpoints/:id/status`
-- **Headers:** `x-admin-key: <ADMIN_API_KEY>`, `Content-Type: application/json`
-- **Request Body:**
-  ```json
-  { "isActive": false }
-  ```
-- **Response (200 OK):**
-  ```json
-  {
-    "success": true,
-    "message": "Checkpoint deactivated successfully",
-    "data": { "id": "...", "name": "...", "isActive": false, "updatedAt": "..." }
-  }
-  ```
-
-#### 4. Download / View QR Code Image
-- **Endpoint:** `GET /api/checkpoints/:id/qr`
-- **Headers:** `x-admin-key: <ADMIN_API_KEY>`
-- **Response (200 OK):** Binary image with `Content-Type: image/png`. Streams high-resolution PNG image directly.
+### A. Health Check
+- **Endpoint:** `GET /`
+- **Response (`200 OK`):** Service status, version (`2.0.0`), and enabled features.
 
 ---
 
-### B. Participant Attendance & Team Registration
+### B. Admin Endpoints
+*All admin endpoints require `x-admin-key: <ADMIN_API_KEY>`.*
 
-#### Register Participant Attendance
-- **Endpoint:** `POST /api/attendance/register`
-- **Headers:** `Content-Type: application/json`
-- **Request Body:**
-  ```json
-  {
-    "name": "Alice Johnson",
-    "externalUserId": "student_roll_101",
-    "teamName": "CyberKnights"
-  }
-  ```
-- **Response (201 Created / 200 OK):**
+#### 1. Bulk Import Participants (CSV)
+- **Endpoint:** `POST /api/admin/participants/import`
+- **Headers:** `x-admin-key: <ADMIN_API_KEY>`, `Content-Type: multipart/form-data` (field name: `file`) or raw `text/csv`
+- **CSV Columns:** `name,email,teamName` (optional `externalUserId`)
+- **Response (`200 OK`):**
   ```json
   {
     "success": true,
-    "message": "Participant registered successfully",
+    "message": "Participant import completed",
     "data": {
-      "id": "part_uuid_123",
-      "name": "Alice Johnson",
-      "externalUserId": "student_roll_101",
-      "team": {
-        "id": "team_uuid_456",
-        "teamName": "CyberKnights"
-      }
+      "totalRecords": 5,
+      "successfulImports": 5,
+      "failedImports": 0,
+      "errors": []
     }
   }
   ```
 
+#### 2. Generate Cryptographic QR Tokens
+- **Endpoint:** `POST /api/admin/qr/generate`
+- **Headers:** `x-admin-key: <ADMIN_API_KEY>`, `Content-Type: application/json`
+- **Request Body (optional):**
+  ```json
+  {
+    "forceRegenerate": false,
+    "teamId": "optional-team-uuid"
+  }
+  ```
+- **Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "QR code generation completed",
+    "data": {
+      "totalParticipants": 50,
+      "tokensGenerated": 50,
+      "tokensSkipped": 0
+    }
+  }
+  ```
+
+#### 3. Bulk Export All QR Codes (ZIP)
+- **Endpoint:** `GET /api/admin/qr/export`
+- **Headers:** `x-admin-key: <ADMIN_API_KEY>`
+- **Response (`200 OK`):** Streams `attendance-qrs.zip` (`Content-Type: application/zip`) with PNG QR codes organized into folders by team (`<TeamName>/<ParticipantName>_<shortId>.png`).
+
+#### 4. Download Single Participant QR (PNG)
+- **Endpoint:** `GET /api/admin/participants/:id/qr`
+- **Headers:** `x-admin-key: <ADMIN_API_KEY>`
+- **Response (`200 OK`):** Binary PNG image (`Content-Type: image/png`).
+
+#### 5. Attendance Dashboard Summary
+- **Endpoint:** `GET /api/admin/attendance`
+- **Headers:** `x-admin-key: <ADMIN_API_KEY>`
+- **Response (`200 OK`):** Overall attendance totals, check-in percentage, and per-team summary list.
+
+#### 6. Team Attendance Breakdown
+- **Endpoint:** `GET /api/admin/attendance/:teamId`
+- **Headers:** `x-admin-key: <ADMIN_API_KEY>`
+- **Response (`200 OK`):** Team details with each member's attendance status (`PRESENT` / `ABSENT`) and scan timestamp.
+
+#### 7. Participant Details
+- **Endpoint:** `GET /api/admin/participants/:id`
+- **Headers:** `x-admin-key: <ADMIN_API_KEY>`
+- **Response (`200 OK`):** Participant profile, team info, and attendance status. Token hashes and encrypted tokens are never exposed.
+
 ---
 
-### C. QR Scan Validation (Atomic Team Lock)
+### C. Event-Day Attendance Scanning
 
-#### Scan & Claim Checkpoint Quiz
-- **Endpoint:** `POST /api/qr/scan`
+#### Scan Participant QR
+- **Endpoint:** `POST /api/attendance/scan`
 - **Headers:**
   - `Content-Type: application/json`
-  - `Authorization: Bearer <TOKEN>` (or `x-participant-id: student_roll_101` in dev)
+  - Staff credentials (one of):
+    - `Authorization: Bearer <STAFF_JWT>`
+    - `x-staff-id: <STAFF_ID>` + `x-integration-secret: <INTEGRATION_SHARED_SECRET>`
+    - `x-staff-id: <STAFF_ID>` (in development when `NODE_ENV !== "production"`)
 - **Request Body:**
   ```json
   {
-    "qrToken": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+    "qrToken": "TH26_<64_hex_chars>"
   }
   ```
 - **Responses:**
-  - **Success (200 OK):**
+  - **Success (`200 OK`):**
     ```json
     {
       "success": true,
-      "message": "Checkpoint access granted",
+      "message": "Attendance registered successfully",
       "data": {
-        "checkpointId": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
-        "teamId": "team_uuid_456",
-        "accessGranted": true
+        "participantName": "Arjun Sharma",
+        "teamName": "Team Blaze",
+        "attendanceStatus": "PRESENT",
+        "scannedAt": "2026-11-27T05:20:34.695Z"
       }
     }
     ```
-  - **Already Claimed by Team (409 Conflict):**
-    ```json
-    {
-      "success": false,
-      "message": "Your team has already accessed this checkpoint."
-    }
-    ```
-  - **Inactive Checkpoint (400 Bad Request):**
-    ```json
-    {
-      "success": false,
-      "message": "This checkpoint is currently inactive."
-    }
-    ```
-  - **Invalid QR Token (404 Not Found):**
-    ```json
-    {
-      "success": false,
-      "message": "Invalid QR code."
-    }
-    ```
-  - **Unregistered Participant (403 Forbidden):**
-    ```json
-    {
-      "success": false,
-      "message": "Participant is not registered or has no verified team association."
-    }
-    ```
+  - **Duplicate Scan (`409 Conflict`):** `"Attendance has already been registered."`
+  - **Invalid QR (`404 Not Found`):** `"Invalid QR code."`
+  - **Unauthorized (`401 Unauthorized`):** `"Unauthorized: Missing or invalid event staff credentials."`
 
 ---
 
-## 4. Main Website Integration Contract
+## 4. Security Measures Implemented
 
-When the main website's embedded scanner scans a checkpoint QR:
-1. The main website sends `POST /api/qr/scan` with the scanned `qrToken`.
-2. Participant identity **MUST** be supplied via trusted credentials:
-   - **Production:** `Authorization: Bearer <JWT>` containing verified `externalUserId` (e.g. `sub` or `rollNumber`).
-   - **Server-to-Server Proxy:** `x-participant-id: <ID>` accompanied by `x-integration-secret: <SHARED_SECRET>`.
-3. The response contains `{ success: true, data: { checkpointId, teamId, accessGranted: true } }`. The main website can then unlock the corresponding quiz interface.
-
----
-
-## 5. Security Measures Implemented
-
-1. **Cryptographic Randomness:** Checkpoint tokens use Node's `crypto.randomBytes(32)` (256 bits of entropy).
-2. **SHA-256 Database Hashing:** Raw tokens are never stored in plaintext in the database. Scan verification hashes the incoming token before querying PostgreSQL.
-3. **AES-256-GCM Token Encryption:** Tokens are stored encrypted with authentication tags for dynamic QR image rendering without plaintext exposure.
-4. **PostgreSQL Atomic Lock:** `QuizAccess` enforces `@@unique([teamId, checkpointId])`. Simultaneous scans from two teammates are atomically rejected by PostgreSQL with code `P2002`.
-5. **Constant-Time Admin Key Comparison:** `crypto.timingSafeEqual` prevents timing attacks on the `x-admin-key` header.
-6. **Rate Limiting:** IP-based throttles protect against token brute-forcing (40 scans / 15 min), registration spam (30 / 15 min), and admin route abuse.
-7. **Strict CORS:** Origins are restricted via `FRONTEND_URL` environment whitelist.
+1. **Cryptographic Randomness:** QR tokens use `crypto.randomBytes(32)` (256 bits of entropy) prefixed with `TH26_`.
+2. **SHA-256 Database Lookup:** Raw tokens are never stored in plaintext. Incoming scans are hashed with SHA-256 before querying PostgreSQL.
+3. **AES-256-GCM Token Encryption:** Tokens are stored encrypted with authentication tags so admins can export PNGs without storing plaintext tokens.
+4. **PostgreSQL Atomic Lock:** `Attendance` enforces `@unique` on `participantId`. Concurrent duplicate scans are atomically rejected by PostgreSQL (`P2002` -> HTTP `409`).
+5. **Constant-Time Admin Key Comparison:** `crypto.timingSafeEqual` protects `x-admin-key`.
+6. **Rate Limiting & CORS:** IP-based rate limiters on scanning, CSV imports, QR generation, and admin routes, plus `FRONTEND_URL` CORS whitelist.
 
 ---
 
-## 6. Local Setup & Commands
+## 5. Local Setup & Commands
 
 1. **Clone repository and checkout `backend` branch:**
    ```bash
@@ -266,9 +201,10 @@ When the main website's embedded scanner scans a checkpoint QR:
    cp .env.example .env
    # Fill in DATABASE_URL, DIRECT_URL, ADMIN_API_KEY, QR_ENCRYPTION_KEY, FRONTEND_URL
    ```
-4. **Generate Prisma Client:**
+4. **Generate Prisma Client & Run Migrations:**
    ```bash
    npx prisma generate
+   npx prisma migrate deploy
    ```
 5. **Run Development Server:**
    ```bash

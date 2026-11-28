@@ -1,9 +1,8 @@
 import express from "express";
 import cors, { CorsOptions } from "cors";
 import dotenv from "dotenv";
-import checkpointRoutes from "./routes/checkpoint.routes";
+import adminRoutes from "./routes/admin.routes";
 import attendanceRoutes from "./routes/attendance.routes";
-import qrScanRoutes from "./routes/qrScan.routes";
 import { errorHandler } from "./middleware/errorHandler";
 
 dotenv.config();
@@ -24,7 +23,7 @@ const allowedOrigins = process.env.FRONTEND_URL
 
 const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
-    // Allow non-browser requests (e.g. mobile apps, server-to-server, curl in dev)
+    // Allow non-browser requests (e.g. mobile scanner app, server-to-server, curl in dev)
     if (!origin) return callback(null, true);
 
     if (allowedOrigins.includes(origin)) {
@@ -38,32 +37,39 @@ const corsOptions: CorsOptions = {
     "Content-Type",
     "Authorization",
     "x-admin-key",
-    "x-participant-id",
+    "x-staff-id",
     "x-integration-secret",
   ],
   credentials: true,
 };
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "5mb" }));
+app.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
 
 // -----------------------------------------------------------------------------
 // Base Health Route
 // -----------------------------------------------------------------------------
 app.get("/", (_req, res) => {
   res.json({
-    name: "Treasure Hunt QR Backend",
+    name: "Treasure Hunt Attendance QR Backend",
     status: "operational",
-    version: "1.0.0",
+    version: "2.0.0",
+    features: [
+      "bulk_participant_import",
+      "secure_qr_generation",
+      "bulk_zip_export",
+      "atomic_attendance_scanning",
+      "attendance_reporting",
+    ],
   });
 });
 
 // -----------------------------------------------------------------------------
 // API Route Registration
 // -----------------------------------------------------------------------------
-app.use("/api/checkpoints", checkpointRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/api/attendance", attendanceRoutes);
-app.use("/api/qr", qrScanRoutes);
 
 // -----------------------------------------------------------------------------
 // Centralized Error Handling
@@ -74,7 +80,7 @@ const PORT = process.env.PORT || 5000;
 
 if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
-    console.log(`Treasure Hunt QR Backend running on port ${PORT}`);
+    console.log(`Treasure Hunt Attendance QR Backend running on port ${PORT}`);
   });
 }
 

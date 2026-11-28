@@ -36,22 +36,40 @@ model Team {
   id        String   @id @default(uuid())
   teamName  String   @unique
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   participants Participant[]
   quizAccesses QuizAccess[]
 }
 
 model Participant {
-  id             String   @id @default(uuid())
-  name           String
-  externalUserId String   @unique
-  teamId         String
-  createdAt      DateTime @default(now())
+  id               String   @id @default(uuid())
+  name             String
+  email            String?  @unique
+  externalUserId   String?  @unique
+  teamId           String
+  qrTokenHash      String?  @unique
+  qrTokenEncrypted String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   team         Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  attendance   Attendance?
   quizAccesses QuizAccess[]
 
   @@index([teamId])
+}
+
+model Attendance {
+  id            String   @id @default(uuid())
+  participantId String   @unique
+  scannedAt     DateTime @default(now())
+  scannedBy     String?
+  createdAt     DateTime @default(now())
+
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@index([participantId])
 }
 
 model QuizAccess {

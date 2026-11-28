@@ -22,3 +22,9 @@ Thumbs.db
 
 # Generated files
 /src/generated/prisma
+
+# Test and mock artifacts
+*.zip
+sample_*.png
+mock_participants.csv
+run_full_simulation.js

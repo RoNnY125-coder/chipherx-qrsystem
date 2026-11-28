@@ -1,65 +1,68 @@
 import { Request, Response, NextFunction } from "express";
 
-export interface AuthenticatedParticipant {
-  externalUserId: string;
+export interface AuthenticatedStaff {
+  userId: string;
+  role?: string;
 }
 
-export interface AuthenticatedRequest extends Request {
-  participant?: AuthenticatedParticipant;
+export interface StaffAuthenticatedRequest extends Request {
+  staff?: AuthenticatedStaff;
 }
 
 /**
- * Participant Identity Verification Middleware.
+ * Staff Identity Verification Middleware for Attendance Scanning.
  *
- * CONTRACT INTEGRATION INTERFACE WITH MAIN WEBSITE:
- * The main website authenticates participants. When scanning or accessing quiz resources,
- * the main website provides participant identity proof.
+ * INTEGRATION INTERFACE CONTRACT WITH MAIN EVENT WEBSITE:
+ * On event day, authorized staff members operate the embedded scanner. When a scan is performed,
+ * the main website forwards the request along with verified staff credentials.
  *
- * Currently supported integration modes:
- * 1. Bearer Token (JWT format or session token agreed with the main website):
+ * Supported integration mechanisms:
+ * 1. Bearer Token (JWT issued by main website):
  *    Passed in `Authorization: Bearer <token>`.
- * 2. Integration Header (for server-to-server or proxy integration):
- *    Passed in `x-participant-id` (validated when `INTEGRATION_SHARED_SECRET` matches).
- * 3. Development fallback:
- *    When `NODE_ENV !== 'production'`, allows `x-participant-id` for testing and staging.
+ * 2. Server-to-server proxy with shared secret:
+ *    Passed via `x-staff-id: <STAFF_ID>` with `x-integration-secret: <SECRET>`.
+ * 3. Development testing:
+ *    In development (`NODE_ENV !== 'production'`), accepts `x-staff-id: <STAFF_ID>`.
  *
  * PENDING CONFIRMATION FROM MAIN WEBSITE TEAM:
- * - Specific JWT algorithm (HS256 vs RS256) and public key/secret.
- * - Exact claim name for external participant ID (e.g., `sub`, `userId`, or `rollNumber`).
+ * - Staff JWT signing algorithm and shared secret / public key.
+ * - Staff user ID claim field name (e.g., `sub` vs `staffId` vs `email`).
  */
-export function participantAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
+export function staffAuth(
+  req: StaffAuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void {
   const authHeader = req.headers.authorization;
-  const devParticipantId = req.headers["x-participant-id"];
+  const staffIdHeader = req.headers["x-staff-id"];
   const integrationSecret = req.headers["x-integration-secret"];
 
-  // Option A: Main website server-to-server integration with shared secret
+  // 1. Server-to-server integration with shared secret
   if (
     process.env.INTEGRATION_SHARED_SECRET &&
     integrationSecret === process.env.INTEGRATION_SHARED_SECRET &&
-    typeof devParticipantId === "string" &&
-    devParticipantId.trim()
+    typeof staffIdHeader === "string" &&
+    staffIdHeader.trim()
   ) {
-    req.participant = { externalUserId: devParticipantId.trim() };
+    req.staff = { userId: staffIdHeader.trim(), role: "staff" };
     next();
     return;
   }
 
-  // Option B: Bearer token header
+  // 2. Bearer token
   if (authHeader && authHeader.startsWith("Bearer ")) {
     const token = authHeader.substring(7).trim();
 
-    // If an agreed JWT secret is provided in environment variables, decode/verify
-    if (process.env.MAIN_WEBSITE_JWT_SECRET) {
+    if (process.env.STAFF_JWT_SECRET) {
       try {
-        // Standard payload extraction (base64 decode payload for claims or verify when secret provided)
         const parts = token.split(".");
         if (parts.length === 3) {
           const payloadJson = Buffer.from(parts[1], "base64url").toString("utf-8");
           const payload = JSON.parse(payloadJson);
-          const userId = payload.sub || payload.userId || payload.externalUserId || payload.id;
+          const userId = payload.sub || payload.userId || payload.staffId || payload.id;
 
           if (userId && typeof userId === "string") {
-            req.participant = { externalUserId: userId.trim() };
+            req.staff = { userId: userId.trim(), role: payload.role || "staff" };
             next();
             return;
           }
@@ -67,29 +70,28 @@ export function participantAuth(req: AuthenticatedRequest, res: Response, next: 
       } catch {
         res.status(401).json({
           success: false,
-          message: "Unauthorized: Invalid participant token format.",
+          message: "Unauthorized: Invalid staff token format.",
         });
         return;
       }
     } else {
-      // Clean token string passed as externalUserId if simple token format is used
       if (token) {
-        req.participant = { externalUserId: token };
+        req.staff = { userId: token, role: "staff" };
         next();
         return;
       }
     }
   }
 
-  // Option C: Development/testing header (strictly disabled in production without secret)
-  if (process.env.NODE_ENV !== "production" && typeof devParticipantId === "string" && devParticipantId.trim()) {
-    req.participant = { externalUserId: devParticipantId.trim() };
+  // 3. Development testing fallback
+  if (process.env.NODE_ENV !== "production" && typeof staffIdHeader === "string" && staffIdHeader.trim()) {
+    req.staff = { userId: staffIdHeader.trim(), role: "staff" };
     next();
     return;
   }
 
   res.status(401).json({
     success: false,
-    message: "Unauthorized: Missing or invalid participant credentials.",
+    message: "Unauthorized: Missing or invalid event staff credentials.",
   });
 }
